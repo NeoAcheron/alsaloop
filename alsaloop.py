@@ -33,41 +33,36 @@ import alsaaudio
 
 output_stopped = True
 
-# Which audio device to use
-DEVICE_NAME = 'default'
-
 # The maximum value which can be read from the input device (in other words, the value for maximum volume)
 SAMPLE_MAXVAL = 32768
 
 CHANNELS = 2
 # Sample rate in samples per second
 SAMPLE_RATE = 48000
-PERIOD_SIZE = 1024
+PERIOD_SIZE = 2048
 # The duration of a measurement interval (after which the thresholds will be checked) in seconds.
-SAMPLE_SECONDS_BEFORE_CHECK = 0.25
+SAMPLE_SECONDS_BEFORE_CHECK = 1
 # The number of samples before each check
 SAMPLE_COUNT_BEFORE_CHECK = int((SAMPLE_RATE / CHANNELS) * SAMPLE_SECONDS_BEFORE_CHECK)
 # The time during which the input threshold hasn't been reached, before output is stopped.
 # This is useful for preventing the output device from turning off and on when there is a short silence in the input.
 SAMPLE_SECONDS_BEFORE_TURN_OFF = 15
 # The number of checks which have to fail before audio is turned off.
-CHECK_NUMBER_BEFORE_TURN_OFF = int(SAMPLE_SECONDS_BEFORE_TURN_OFF / SAMPLE_SECONDS_BEFORE_CHECK)
-# The number of checks which have to pass before audio is turned on.
-CHECK_NUMBER_BEFORE_TURN_ON = 3
+CHECK_NUMBER_BEFORE_TURN_OFF = int(SAMPLE_SECONDS_BEFORE_TURN_OFF / SAMPLE_COUNT_BEFORE_CHECK)
 
 
 def open_sound(output=False):
-    input_device = alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NONBLOCK, device=DEVICE_NAME)
+    input_device = alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NONBLOCK, device="hw:CARD=UAC2Gadget,DEV=0")
     input_device.setchannels(CHANNELS)
     input_device.setrate(SAMPLE_RATE)
-    input_device.setformat(alsaaudio.PCM_FORMAT_S16_LE)
+    input_device.setformat(alsaaudio.PCM_FORMAT_S32_LE)
     input_device.setperiodsize(PERIOD_SIZE)
 
     if output:
-        output_device = alsaaudio.PCM(alsaaudio.PCM_PLAYBACK, alsaaudio.PCM_NONBLOCK, device=DEVICE_NAME)
+        output_device = alsaaudio.PCM(alsaaudio.PCM_PLAYBACK, alsaaudio.PCM_NONBLOCK, device=device)
         output_device.setchannels(CHANNELS)
         output_device.setrate(SAMPLE_RATE)
-        output_device.setformat(alsaaudio.PCM_FORMAT_S16_LE)
+        output_device.setformat(alsaaudio.PCM_FORMAT_S32_LE)
         return input_device, output_device
 
     else:
@@ -101,6 +96,7 @@ if __name__ == '__main__':
     except:
         print("using alsaloop without input level detection")
 
+    device = 'default'
     input_device = open_sound(output=False)
     output_device = None
     finished = False
@@ -114,8 +110,6 @@ if __name__ == '__main__':
 
     # Counter for subsequent intervals in which the threshold has not been met while playback is active
     count_playback_threshold_not_met = 0
-    # Counter for subsequent intervals in which the threshold has been met while playback is not active
-    count_playback_threshold_met = 0
 
     while not finished:
         # Read data from device
@@ -136,13 +130,13 @@ if __name__ == '__main__':
         while offset < data_length:
             try:
                 # Read the left and right channel from the data packet
-                (sample_l, sample_r) = unpack_from('<hh', data, offset=offset)
+                (sample_l, sample_r) = unpack_from('<ii', data, offset=offset)
             except:
                 # logging.error("%s %s %s",l,len(data), offset)
                 # Set a default value of zero so the program can keep running
                 (sample_l, sample_r) = (0, 0)
 
-            offset += 4
+            offset += 8
             samples += 2
             # Calculate the sum of all samples squared, used to determine rms later.
             sample_sum += sample_l * sample_l + sample_r * sample_r
@@ -162,26 +156,24 @@ if __name__ == '__main__':
             # Check if the threshold has been exceeded
             if start_db_threshold == 0 or decibel(max_sample) > threshold:
                 input_detected = True
+                status = "P"
             else:
                 input_detected = False
+                status = "-"
 
-            triggered_status_string = "T" if input_detected else "-"
-            active_status_str = "A" if not output_stopped else "-"
-            print("{} {} {:.1f} {:.1f}".format(active_status_str, triggered_status_string, decibel(rms_volume), decibel(max_sample)), flush=True)
+            print("{} {:.1f} {:.1f}".format(status, decibel(rms_volume), decibel(max_sample)), flush=True)
 
             sample_sum = 0
             samples = 0
             max_sample = 0
 
             if output_stopped and input_detected:
-                count_playback_threshold_met += 1
-                if count_playback_threshold_met >= CHECK_NUMBER_BEFORE_TURN_ON:
-                    del input_device
-                    logging.info("Input signal detected, pausing other players")
-                    os.system("/opt/hifiberry/bin/pause-all alsaloop")
-                    (input_device, output_device) = open_sound(output=True)
-                    output_stopped = False
-                    continue
+                del input_device
+                logging.info("Input signal detected, pausing other players")
+                os.system("/opt/hifiberry/bin/pause-all alsaloop")
+                (input_device, output_device) = open_sound(output=True)
+                output_stopped = False
+                continue
 
             elif not output_stopped and not input_detected:
                 count_playback_threshold_not_met += 1
@@ -189,7 +181,6 @@ if __name__ == '__main__':
                 if count_playback_threshold_not_met > CHECK_NUMBER_BEFORE_TURN_OFF:
                     del input_device
                     output_device = None
-                    print("Input signal lost, stopping playback")
                     logging.info("Input signal lost, stopping playback")
                     input_device = open_sound(output=False)
                     output_stopped = True
@@ -198,8 +189,6 @@ if __name__ == '__main__':
             if input_detected:
                 # Reset counter when input detected
                 count_playback_threshold_not_met = 0
-            else:
-                count_playback_threshold_met = 0
 
         if not output_stopped:
             output_device.write(data)

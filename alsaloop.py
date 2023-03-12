@@ -50,6 +50,15 @@ SAMPLE_SECONDS_BEFORE_TURN_OFF = 15
 # The number of checks which have to fail before audio is turned off.
 CHECK_NUMBER_BEFORE_TURN_OFF = int(SAMPLE_SECONDS_BEFORE_TURN_OFF / SAMPLE_COUNT_BEFORE_CHECK)
 
+def open_mixer(output=False):
+    input_mixer = alsaaudio.Mixer(control='PCM', device="hw:CARD=UAC2Gadget")
+
+    if output:
+        output_mixer = alsaaudio.Mixer(control='DSPVolume', device="hw:CARD=sndrpihifiberry") 
+        return input_mixer, output_mixer
+
+    else:
+        return input_mixer
 
 def open_sound(output=False):
     input_device = alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NONBLOCK, device="hw:CARD=UAC2Gadget,DEV=0")
@@ -189,6 +198,10 @@ if __name__ == '__main__':
             if input_detected:
                 # Reset counter when input detected
                 count_playback_threshold_not_met = 0
+                (input_mixer, output_mixer) = open_mixer(output=True)
+                volume = input_mixer.getvolume(alsaaudio.PCM_CAPTURE)[0]
+                output_mixer.setvolume(volume)
+
 
         if not output_stopped:
             output_device.write(data)
